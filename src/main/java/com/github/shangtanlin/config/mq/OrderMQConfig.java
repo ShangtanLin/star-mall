@@ -37,6 +37,8 @@ public class OrderMQConfig {
     /** 消费者重试间隔：30秒 */
     public static final int RETRY_INTERVAL_MS = 30000;
     //public static final int RETRY_INTERVAL_MS = 3000;
+    /** 最大重试次数：消息从死信队列回流的最大次数 */
+    public static final int MAX_RETRY_COUNT = 3;
 
     // ========== 延迟队列配置（消息先到这里，等待 TTL 到期）==========
 

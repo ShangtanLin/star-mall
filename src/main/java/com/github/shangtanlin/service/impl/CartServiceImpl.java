@@ -186,6 +186,18 @@ public class CartServiceImpl implements CartService {
                         vo.setImage(spu.getMainImage());
                         vo.setShopId(spu.getShopId());
                         if (shop != null) vo.setShopName(shop.getShopName());
+
+                        // 商品状态判断
+                        vo.setSpuStatusDesc(spu.getStatus() == 1 ? "在售" : "下架");
+                    }
+
+                    // 库存状态判断（阈值100）
+                    if (sku.getStock() <= 0) {
+                        vo.setSkuStockDesc("已售空");
+                    } else if (sku.getStock() >= 100) {
+                        vo.setSkuStockDesc("库存充足");
+                    } else {
+                        vo.setSkuStockDesc("库存不足");
                     }
 
                     if (redisInfo != null) {
@@ -265,13 +277,10 @@ public class CartServiceImpl implements CartService {
                 cartWriteBackMessage
         );
 
-        String wrongKey = "invalid_key";
-
         // 4. 发送消息
         rabbitTemplate.convertAndSend(
                 CART_EXCHANGE,
-                //CART_ROUTING_KEY,
-                wrongKey,
+                CART_ROUTING_KEY,
                 cartWriteBackMessage,
                 message -> {
                     message.getMessageProperties().setCorrelationId(msgId);

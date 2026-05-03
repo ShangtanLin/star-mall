@@ -72,9 +72,9 @@ public class CartConsumer {
                 cartWriteBackMessage.getMsgId(), retryCount);
 
         try {
-            // 模拟异常
-            CartItem cartItem = null;
-            cartItem.getId();
+            // 模拟异常（调试时使用，生产环境需注释掉）
+            // CartItem cartItem = null;
+            // cartItem.getId();
 
             // 2. 执行业务逻辑
             Integer type = cartWriteBackMessage.getType();

@@ -32,5 +32,8 @@ public class CartItemVO {
     private Long shopId;
     private String shopName;
 
+    //商品状态信息（供前端展示）
+    private String spuStatusDesc;   // "在售" 或 "下架"
+    private String skuStockDesc;    // "库存充足" 或 "库存不足" 或 "已售空"
 
 }

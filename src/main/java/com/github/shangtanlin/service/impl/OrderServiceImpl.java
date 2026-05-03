@@ -211,7 +211,7 @@ public class OrderServiceImpl
         // 4. 存入 Redis，设置 30 分钟有效期
         // Key 结构：order:submit:token:用户ID:UUID
         String redisKey = RedisConstant.ORDER_SUBMIT_KEY + userId + ":" + token;
-        stringRedisTemplate.opsForValue().set(redisKey, "1", 30, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set(redisKey, "1", 60, TimeUnit.MINUTES);
 
         OrderConfirmVO vo = new OrderConfirmVO();
 

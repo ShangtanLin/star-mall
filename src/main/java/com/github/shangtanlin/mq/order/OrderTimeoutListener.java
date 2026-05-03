@@ -29,11 +29,6 @@ import java.util.UUID;
 @Slf4j
 public class OrderTimeoutListener {
 
-    /**
-     * 最大重试次数（从重试死信队列回流的最大次数）
-     */
-    private static final int MAX_RETRY_COUNT = 3;
-
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Autowired
@@ -95,10 +90,10 @@ public class OrderTimeoutListener {
                     orderSn, retryCount, e.getMessage(), LocalDateTime.now().format(FORMATTER));
 
             // 6. 判断是否达到最大重试次数
-            if (retryCount >= MAX_RETRY_COUNT) {
+            if (retryCount >= OrderMQConfig.MAX_RETRY_COUNT) {
                 // 已达到最大重试次数，执行最终处理并确认消息
                 log.error("⏰ [超时关单] 重试耗尽 | OrderSn: {} 已达到最大重试次数 {}，执行最终处理",
-                        orderSn, MAX_RETRY_COUNT);
+                        orderSn, OrderMQConfig.MAX_RETRY_COUNT);
                 handleFinalFailure(cancelMessage, e);
                 channel.basicAck(deliveryTag, false);  // 确认消息，不再重试
             } else {
@@ -167,7 +162,7 @@ public class OrderTimeoutListener {
                     .routingKey(OrderMQConfig.TIMEOUT_ROUTING_KEY)
                     .payload(JSON.toJSONString(msg))
                     .status(4)  // 4-人工处理（消费失败直接入库等待人工处理）
-                    .retryCount(MAX_RETRY_COUNT)
+                    .retryCount(OrderMQConfig.MAX_RETRY_COUNT)
                     .cause("orderSn=" + msg.getOrderSn() + ", userId=" + msg.getUserId() + ", error=" + e.getMessage())  // 保留原始订单信息
                     .nextRetryTime(null)  // 消费者不参与定时任务重试
                     .build();
