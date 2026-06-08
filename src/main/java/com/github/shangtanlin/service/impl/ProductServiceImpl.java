@@ -16,7 +16,7 @@ import com.alibaba.fastjson.JSON;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import com.github.shangtanlin.model.dto.es.ProductIndexDoc;
-import com.github.shangtanlin.model.dto.ProductQueryDTO;
+import com.github.shangtanlin.model.dto.product.ProductQueryDTO;
 import com.github.shangtanlin.mapper.*;
 import com.github.shangtanlin.model.entity.*;
 import com.github.shangtanlin.model.entity.category.Category;

@@ -107,7 +107,7 @@ public class SkuServiceImpl
     }
 
     @Override
-    public void rollBackStock(List<OrderItemDTO> stockItems) {
+    public void rollBackStock(String orderSn, List<OrderItemDTO> stockItems) {
         // 1. 非空校验
         if (CollectionUtils.isEmpty(stockItems)) {
             return;
@@ -125,11 +125,11 @@ public class SkuServiceImpl
             if (rows == 0) {
                 // 如果返回0，说明数据库里找不到这个skuId（可能被管理员物理删除了）
                 // 这种情况下抛出异常，触发事务回滚，保证逻辑一致性
-                log.error("回补库存失败，商品不存在！skuId: {}", skuId);
-                throw new BusinessException("系统错误：无法找回商品库存");
+                log.error("库存回补失败，商品不存在！主订单号：{}， skuId: {}", orderSn, skuId);
+                throw new BusinessException("系统错误：商品不存在");
             }
         }
 
-        log.info("成功回补库存，涉及商品种类：{} 类", stockItems.size());
+        log.info("[库存回补] 库存回补成功，共 {} 种商品，主订单号：{}，", stockItems.size(),orderSn);
     }
 }

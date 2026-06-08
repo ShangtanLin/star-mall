@@ -22,6 +22,11 @@ public class MqMessageLog {
     private String id;
 
     /**
+     * 原始消息ID（消费者失败入库时记录，便于与生产者记录关联）
+     */
+    private String originId;
+
+    /**
      * 来源类型: 0-生产者端, 1-消费者端
      */
     private Integer sourceType;

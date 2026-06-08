@@ -15,7 +15,7 @@ public class MqErrorRecord {
     private Long id;
 
     /**
-     * 原始消息 ID（对应 MqCorrelationData 中的 id）
+     * 原始消息 ID（对应 CorrelationData 中的 id）
      */
     private String msgId;
 

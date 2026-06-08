@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.converter.DefaultClassMapper;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,23 +54,23 @@ public class RabbitMQBaseConfig {
         template.setConfirmCallback((correlationData, ack, cause) -> {
             String msgId = correlationData != null ? correlationData.getId() : null;
             if (msgId == null) {
-                log.warn("ConfirmCallback 收到无 ID 的确认，跳过处理");
+                log.warn("[ConfirmCallback] 收到无ID的确认，跳过处理");
                 return;
             }
 
             if (ack) {
-                // 消息到达 Exchange，尝试更新为成功
+                // 消息到达 Exchange，尝试更新为成功，状态为1
                 // 仅当 status=0（发送中）时才更新，不会覆盖路由失败（status=2）
                 int updated = mqMessageLogMapper.updateStatusToSuccess(msgId);
                 if (updated > 0) {
-                    log.info("消息投递成功: ID = {}", msgId);
+                    log.info("[ConfirmCallback] 消息投递成功，ID:{}", msgId);
                 } else {
-                    log.info("消息投递确认成功，但状态已被更新（如路由失败）: ID = {}", msgId);
+                    log.info("[ConfirmCallback] 消息投递确认成功，但状态已被更新（如路由失败），ID:{}", msgId);
                 }
             } else {
-                // 消息未到达 Exchange，更新为投递失败
+                // 消息未到达 Exchange，更新为投递失败，状态为3
                 mqMessageLogMapper.updateStatusToSendFail(msgId, cause);
-                log.error("消息投递失败: ID = {}, 原因 = {}", msgId, cause);
+                log.error("[ConfirmCallback] 消息投递失败，ID:{}, 原因:{}", msgId, cause);
             }
         });
 
@@ -77,17 +78,14 @@ public class RabbitMQBaseConfig {
         template.setReturnsCallback(returned -> {
             String msgId = returned.getMessage().getMessageProperties().getCorrelationId();
             if (msgId == null) {
-                log.warn("ReturnsCallback 收到无 ID 的退回消息，跳过处理");
+                log.warn("[ReturnsCallback] 收到无ID的退回消息，跳过处理");
                 return;
             }
 
-            String exchange = returned.getExchange();
-            String routingKey = returned.getRoutingKey();
-            String cause = "NO_ROUTE: " + returned.getReplyText();
+            String cause = returned.getReplyText();
 
             mqMessageLogMapper.updateStatusToRouteFail(msgId, cause);
-            log.error("消息路由失败: ID = {}, 交换机 = {}, 路由键 = {}, 原因 = {}",
-                    msgId, exchange, routingKey, cause);
+            log.error("[ReturnsCallback] 消息路由失败，ID:{}", msgId);
         });
 
         // 测试连接

@@ -1,7 +1,7 @@
 package com.github.shangtanlin.service;
 
-import com.github.shangtanlin.model.dto.UserAddressDTO;
-import com.github.shangtanlin.model.dto.UserAddressUpdateDTO;
+import com.github.shangtanlin.model.dto.address.UserAddressDTO;
+import com.github.shangtanlin.model.dto.address.UserAddressUpdateDTO;
 import com.github.shangtanlin.model.entity.user.UserAddress;
 import com.github.shangtanlin.model.vo.UserAddressVO;
 import com.github.shangtanlin.result.Result;

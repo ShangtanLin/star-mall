@@ -2,8 +2,8 @@ package com.github.shangtanlin.service.impl;
 
 import com.github.shangtanlin.common.utils.UserHolder;
 import com.github.shangtanlin.mapper.UserAddressMapper;
-import com.github.shangtanlin.model.dto.UserAddressDTO;
-import com.github.shangtanlin.model.dto.UserAddressUpdateDTO;
+import com.github.shangtanlin.model.dto.address.UserAddressDTO;
+import com.github.shangtanlin.model.dto.address.UserAddressUpdateDTO;
 import com.github.shangtanlin.model.entity.user.UserAddress;
 import com.github.shangtanlin.model.vo.UserAddressVO;
 import com.github.shangtanlin.result.Result;

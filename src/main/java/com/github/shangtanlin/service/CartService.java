@@ -1,7 +1,7 @@
 package com.github.shangtanlin.service;
 
 
-import com.github.shangtanlin.model.dto.CartItemDTO;
+import com.github.shangtanlin.model.dto.cart.CartItemDTO;
 import com.github.shangtanlin.model.vo.CartItemVO;
 import com.github.shangtanlin.result.Result;
 

@@ -1,6 +1,6 @@
 package com.github.shangtanlin.mapper;
 
-import com.github.shangtanlin.model.dto.UserAddressUpdateDTO;
+import com.github.shangtanlin.model.dto.address.UserAddressUpdateDTO;
 import com.github.shangtanlin.model.entity.user.UserAddress;
 import org.apache.ibatis.annotations.*;
 

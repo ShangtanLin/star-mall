@@ -28,5 +28,5 @@ public interface SkuService extends IService<Sku> {
      * 回滚库存
      * @param stockItems
      */
-    void rollBackStock(List<OrderItemDTO> stockItems);
+    void rollBackStock(String orderSn, List<OrderItemDTO> stockItems);
 }

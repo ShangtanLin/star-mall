@@ -1,10 +1,10 @@
 package com.github.shangtanlin.service.impl;
 
 import com.github.shangtanlin.common.utils.UserHolder;
-import com.github.shangtanlin.model.dto.CodeLoginDTO;
-import com.github.shangtanlin.model.dto.PasswordLoginDTO;
-import com.github.shangtanlin.model.dto.RegisterDTO;
-import com.github.shangtanlin.model.dto.UserDTO;
+import com.github.shangtanlin.model.dto.authentication.CodeLoginDTO;
+import com.github.shangtanlin.model.dto.authentication.PasswordLoginDTO;
+import com.github.shangtanlin.model.dto.authentication.RegisterDTO;
+import com.github.shangtanlin.model.dto.user.UserDTO;
 import com.github.shangtanlin.model.entity.user.User;
 import com.github.shangtanlin.mapper.UserMapper;
 import com.github.shangtanlin.result.Result;

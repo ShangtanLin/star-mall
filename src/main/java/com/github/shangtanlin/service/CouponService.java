@@ -1,6 +1,6 @@
 package com.github.shangtanlin.service;
 
-import com.github.shangtanlin.model.dto.CouponRecordDTO;
+import com.github.shangtanlin.model.dto.coupon.CouponRecordDTO;
 import com.github.shangtanlin.model.vo.coupon.CouponTemplateVO;
 import com.github.shangtanlin.model.vo.coupon.UserCouponVO;
 import com.github.shangtanlin.result.Result;
@@ -48,7 +48,7 @@ public interface CouponService {
      * 锁定优惠券 (0 -> 1)
      * 调用时机：用户提交订单，后端创建订单记录时
      */
-    void lockCoupon(Long recordId);
+    void lockCoupon(String orderSn, Long recordId);
 
     /**
      * 正式核销优惠券 (1 -> 2)
@@ -61,7 +61,7 @@ public interface CouponService {
      * 释放/回滚优惠券 (1 -> 0)
      * 调用时机：用户手动取消订单 或 支付超时自动关闭订单
      */
-    void releaseCoupon(Long recordId);
+    void releaseCoupon(String orderSn, Long recordId);
 
     /**
      * 计算当前优惠券的优惠金额（是否可用）

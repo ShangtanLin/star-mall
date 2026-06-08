@@ -11,8 +11,8 @@ public interface MqMessageLogMapper {
     /**
      * 插入消息记录（发送前入库）
      */
-    @Insert("INSERT INTO mq_message_log (id, source_type, business_type, exchange, routing_key, payload, status, retry_count, cause, next_retry_time) " +
-            "VALUES (#{id}, #{sourceType}, #{businessType}, #{exchange}, #{routingKey}, #{payload}, #{status}, #{retryCount}, #{cause}, #{nextRetryTime})")
+    @Insert("INSERT INTO mq_message_log (id, origin_id,source_type, business_type, exchange, routing_key, payload, status, retry_count, cause, next_retry_time) " +
+            "VALUES (#{id}, #{originId}, #{sourceType}, #{businessType}, #{exchange}, #{routingKey}, #{payload}, #{status}, #{retryCount}, #{cause}, #{nextRetryTime})")
     int insert(MqMessageLog log);
 
     /**
@@ -23,9 +23,9 @@ public interface MqMessageLogMapper {
 
     /**
      * 查询待重试的生产者端消息（定时任务用）
-     * source_type=0(生产者端), status IN (0, 2, 3), next_retry_time <= now
+     * source_type=0(生产者端), status IN (2, 3), next_retry_time <= now
      */
-    @Select("SELECT * FROM mq_message_log WHERE source_type = 0 AND status IN (0, 2, 3) AND next_retry_time <= NOW() ORDER BY create_time ASC")
+    @Select("SELECT * FROM mq_message_log WHERE source_type = 0 AND status IN (2, 3) AND next_retry_time <= NOW() ORDER BY create_time ASC")
     List<MqMessageLog> selectPendingRetry();
 
     /**

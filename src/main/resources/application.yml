@@ -18,6 +18,11 @@ spring:
       password: 123456
       database: 1
 
+  task:
+    scheduling:
+      pool:
+        size: 10 # 改成 10 个线程
+
 
 
   rabbitmq:

@@ -1,7 +1,7 @@
 package com.github.shangtanlin.mq.coupon;
 
 import com.github.shangtanlin.config.mq.CouponMQConfig;
-import com.github.shangtanlin.model.dto.CouponRecordDTO;
+import com.github.shangtanlin.model.dto.coupon.CouponRecordDTO;
 import com.github.shangtanlin.service.CouponService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;

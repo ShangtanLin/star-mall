@@ -1,7 +1,7 @@
 package com.github.shangtanlin.config;
 
 import com.github.shangtanlin.common.utils.UserHolder;
-import com.github.shangtanlin.model.dto.UserDTO;
+import com.github.shangtanlin.model.dto.user.UserDTO;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;

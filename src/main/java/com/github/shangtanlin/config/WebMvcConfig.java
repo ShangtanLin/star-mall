@@ -25,7 +25,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/product/**",
                         // 核心修改点：必须补全 /api 前缀，并确保双星号覆盖所有子路径
                         "/api/order/pay/**",
-                        "/api/category/**"
+                        "/api/category/**",
+                        "/api/notify/**"
                 );
     }
 }

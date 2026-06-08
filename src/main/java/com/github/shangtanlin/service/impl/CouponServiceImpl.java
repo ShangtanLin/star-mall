@@ -10,7 +10,7 @@ import com.github.shangtanlin.common.utils.UserHolder;
 import com.github.shangtanlin.config.mq.CouponMQConfig;
 import com.github.shangtanlin.mapper.coupon.CouponTemplateMapper;
 import com.github.shangtanlin.mapper.coupon.CouponUserRecordMapper;
-import com.github.shangtanlin.model.dto.CouponRecordDTO;
+import com.github.shangtanlin.model.dto.coupon.CouponRecordDTO;
 import com.github.shangtanlin.model.entity.coupon.CouponTemplate;
 import com.github.shangtanlin.model.entity.coupon.CouponUserRecord;
 import com.github.shangtanlin.model.vo.coupon.CouponTemplateVO;
@@ -361,9 +361,8 @@ public class CouponServiceImpl implements CouponService {
      */
     @Override
     @Transactional(rollbackFor = Exception.class)  //方便之后做扩展
-    public void lockCoupon(Long recordId) {
+    public void lockCoupon(String orderSn, Long recordId) {
         Long userId = UserHolder.getUser().getId();
-        log.info("内部调用：锁定优惠券. 用户:{}, 记录ID:{}", userId, recordId);
         
         // 只有状态为 0 (未使用) 的券才能被锁定为 1 (已锁定)
         int rows = couponUserRecordMapper.updateStatus(recordId,
@@ -372,9 +371,9 @@ public class CouponServiceImpl implements CouponService {
 
         if (rows == 0) {
             // 报错说明：券可能已经过期、被别人锁了、或者根本不是这个用户的
-            throw new BusinessException("优惠券锁定失败，请刷新后重试");
+            throw new BusinessException("[锁定优惠券] 锁定失败");
         }
-        log.info("【优惠券锁定】用户: {}, 记录ID: {} 状态已变更为 1", userId, recordId);
+        log.info("[锁定优惠券] 锁定成功，主订单号：{}，优惠券记录ID: {}", orderSn, recordId);
     }
 
 
@@ -397,9 +396,11 @@ public class CouponServiceImpl implements CouponService {
                 CouponConstants.USER_RECORD_STATUS_LOCKED);
 
         if (rows == 0) {
-            //log.error("【异常】优惠券核销失败！用户: {}, 记录ID: {}, 当前状态可能不是1", userId, recordId);
-            // 这里通常需要报警或记录异常日志，因为钱已经付了，券必须核销掉
+            log.error("[优惠券核销] 核销失败, 记录ID: {}, 当前状态可能不是1",recordId);
+            throw new BusinessException("优惠券核销失败");
         }
+
+        log.info("[优惠券核销] 核销成功, 记录ID: {}",recordId);
     }
 
 
@@ -408,16 +409,15 @@ public class CouponServiceImpl implements CouponService {
      * 调用时机：用户手动取消订单 或 支付超时自动关闭订单
      */
     @Override
-    public void releaseCoupon(Long recordId) {
-        Long userId = UserHolder.getUser().getId();
-        log.info("内部调用：释放优惠券. 用户:{}, 记录ID:{}", userId, recordId);
+    public void releaseCoupon(String orderSn, Long recordId) {
+
         // 只有【已锁定】的券才能退回【未使用】
         int rows = couponUserRecordMapper.updateStatus(recordId,
                 CouponConstants.USER_RECORD_STATUS_UNUSED,
                 CouponConstants.USER_RECORD_STATUS_LOCKED);
 
         if (rows > 0) {
-            log.info("【优惠券退回】用户: {}, 记录ID: {} 已恢复为可用状态", userId, recordId);
+            log.info("[回滚优惠券] 回滚成功，优惠券记录ID: {}，主订单号{}", recordId,orderSn);
         }
     }
 

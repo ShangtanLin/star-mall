@@ -1,8 +1,8 @@
 package com.github.shangtanlin.service;
 
-import com.github.shangtanlin.model.dto.CodeLoginDTO;
-import com.github.shangtanlin.model.dto.PasswordLoginDTO;
-import com.github.shangtanlin.model.dto.RegisterDTO;
+import com.github.shangtanlin.model.dto.authentication.CodeLoginDTO;
+import com.github.shangtanlin.model.dto.authentication.PasswordLoginDTO;
+import com.github.shangtanlin.model.dto.authentication.RegisterDTO;
 import com.github.shangtanlin.result.Result;
 
 public interface UserService {

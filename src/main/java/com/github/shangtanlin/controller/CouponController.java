@@ -71,15 +71,15 @@ public class CouponController {
 
 
 
-    /**
-     * 锁定优惠券 (0 -> 1)
-     * 调用时机：用户提交订单，后端创建订单记录时
-     */
-    @PostMapping("/lock")
-    public Result<?> lock(@RequestParam("recordId") Long recordId) {
-        couponService.lockCoupon(recordId);
-        return Result.ok();
-    }
+    ///**
+    // * 锁定优惠券 (0 -> 1)
+    // * 调用时机：用户提交订单，后端创建订单记录时
+    // */
+    //@PostMapping("/lock")
+    //public Result<?> lock(@RequestParam("recordId") Long recordId) {
+    //    couponService.lockCoupon(recordId);
+    //    return Result.ok();
+    //}
 
 
     /**
@@ -93,14 +93,14 @@ public class CouponController {
     }
 
 
-    /**
-     * 释放/回滚优惠券 (1 -> 0)
-     * 调用时机：用户手动取消订单 或 支付超时自动关闭订单
-     */
-    @PostMapping("/release")
-    public Result<Void> release(@RequestParam("recordId") Long recordId) {
-        couponService.releaseCoupon(recordId);
-        return Result.ok();
-    }
+    ///**
+    // * 释放/回滚优惠券 (1 -> 0)
+    // * 调用时机：用户手动取消订单 或 支付超时自动关闭订单
+    // */
+    //@PostMapping("/release")
+    //public Result<Void> release(@RequestParam("recordId") Long recordId) {
+    //    couponService.releaseCoupon(recordId);
+    //    return Result.ok();
+    //}
 
 }

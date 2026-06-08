@@ -77,6 +77,16 @@ public class SubOrder {
     private Integer status;
 
     /**
+     * 退款状态：0-无退款 1-部分退款中 2-部分退款成功 3-全额退款中 4-全额退款成功
+     */
+    private Integer refundStatus; // 🌟 新增的退款状态字段
+
+    /**
+     * 累计已退金额(含退款中)
+     */
+    private BigDecimal refundedAmount;
+
+    /**
      * 物流公司名称
      */
     private String deliveryCompany;

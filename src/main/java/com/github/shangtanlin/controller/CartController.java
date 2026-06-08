@@ -1,6 +1,6 @@
 package com.github.shangtanlin.controller;
 
-import com.github.shangtanlin.model.dto.CartItemDTO;
+import com.github.shangtanlin.model.dto.cart.CartItemDTO;
 import com.github.shangtanlin.model.vo.CartItemVO;
 import com.github.shangtanlin.result.Result;
 import com.github.shangtanlin.service.CartService;

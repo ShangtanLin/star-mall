@@ -16,6 +16,13 @@ public class CartMQConfig {
     public static final String CART_DLX_QUEUE = "cart.dlx.queue";
     public static final String CART_DLX_ROUTING_KEY = "cart.dlx.routing.key";
 
+
+    /** 消费者重试间隔：30秒 */
+    public static final int RETRY_INTERVAL_MS = 30000;
+    //public static final int RETRY_INTERVAL_MS = 3000;
+    /** 最大重试次数：消息从死信队列回流的最大次数 */
+    public static final int MAX_RETRY_COUNT = 3;
+
     /* ========== 业务队列配置 ========== */
 
     @Bean
@@ -50,9 +57,9 @@ public class CartMQConfig {
     @Bean
     public Queue cartDlxQueue() {
         return QueueBuilder.durable(CART_DLX_QUEUE)
-                // 1. 设置消息在死信队列中只活 60 秒
-                .ttl(5000)
-                // 2. 60秒过期后，消息再次变成死信，把它发回【业务交换机】
+                // 1. 设置消息在死信队列中只活30秒
+                .ttl(RETRY_INTERVAL_MS)
+                // 2. 5秒过期后，消息再次变成死信，把它发回【业务交换机】
                 .deadLetterExchange(CART_EXCHANGE)
                 // 3. 发回业务交换机时，使用的 RoutingKey
                 .deadLetterRoutingKey(CART_ROUTING_KEY)

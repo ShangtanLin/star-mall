@@ -12,16 +12,17 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.PageHelper;
-import com.github.pagehelper.PageInfo;
-import com.github.shangtanlin.common.constant.OrderStatusConstant;
+import com.github.shangtanlin.common.constant.order.FrontOrderDisplayStatus;
+import com.github.shangtanlin.common.constant.order.OrderRefundStatusConstant;
+import com.github.shangtanlin.common.constant.order.OrderStatusConstant;
 import com.github.shangtanlin.common.constant.RedisConstant;
+import com.github.shangtanlin.common.enums.BizCodeEnum;
 import com.github.shangtanlin.common.exception.BusinessException;
 
 import static com.github.shangtanlin.common.constant.RedisConstant.SPU_SALES_RANK_KEY;
 import com.github.shangtanlin.common.utils.OrderStatusUtil;
+import com.github.shangtanlin.common.utils.RabbitMQConsumeUtils;
 import com.github.shangtanlin.common.utils.UserHolder;
-import com.github.shangtanlin.config.ElasticsearchConfig;
 import com.github.shangtanlin.config.mq.OrderMQConfig;
 import com.github.shangtanlin.config.mq.SubOrderMQConfig;
 import com.github.shangtanlin.mapper.*;
@@ -30,14 +31,14 @@ import com.github.shangtanlin.mapper.coupon.CouponTemplateMapper;
 import com.github.shangtanlin.mapper.coupon.CouponUserRecordMapper;
 import com.github.shangtanlin.mapper.mq.MqMessageLogMapper;
 import cn.hutool.json.JSONUtil;
-import com.github.shangtanlin.model.dto.es.OrderSyncMessage;
 import com.github.shangtanlin.model.dto.es.SubOrderIndexDoc;
-import com.github.shangtanlin.model.dto.order.OrderCancelMessage;
+import com.github.shangtanlin.model.vo.order.OrderStatusVO;
+import com.github.shangtanlin.model.vo.order.SubOrderIdSn;
+import com.github.shangtanlin.mq.message.OrderCancelMessage;
+import com.github.shangtanlin.mq.message.OrderSyncMessage;
 import com.github.shangtanlin.model.dto.order.OrderConfirmDTO;
 import com.github.shangtanlin.model.dto.order.OrderItemDTO;
 import com.github.shangtanlin.model.dto.order.OrderSubmitDTO;
-import com.github.shangtanlin.model.dto.mq.MqCorrelationData;
-import com.github.shangtanlin.model.entity.cart.CartItem;
 import com.github.shangtanlin.model.entity.mq.MqMessageLog;
 import com.github.shangtanlin.model.entity.order.OrderItem;
 import com.github.shangtanlin.model.entity.order.ParentOrder;
@@ -46,8 +47,8 @@ import com.github.shangtanlin.model.entity.product.Sku;
 import com.github.shangtanlin.model.entity.product.Spu;
 import com.github.shangtanlin.model.entity.shop.Shop;
 import com.github.shangtanlin.model.entity.user.UserAddress;
-import com.github.shangtanlin.model.enums.OrderStatusEnum;
-import com.github.shangtanlin.model.enums.PaymentTypeEnum;
+import com.github.shangtanlin.common.enums.OrderStatusEnum;
+import com.github.shangtanlin.common.enums.PaymentTypeEnum;
 import com.github.shangtanlin.model.vo.OrderCreateVO;
 import com.github.shangtanlin.model.vo.coupon.UserCouponVO;
 import com.github.shangtanlin.model.vo.order.OrderConfirmVO;
@@ -57,7 +58,6 @@ import com.github.shangtanlin.service.*;
 import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,7 +75,6 @@ import org.springframework.util.StringUtils;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -157,9 +156,15 @@ public class OrderServiceImpl
     private MqMessageLogMapper mqMessageLogMapper;
 
     @Autowired
+    private RabbitMQConsumeUtils rabbitMQSendUtils;
+
+    @Autowired
     @Qualifier("orderQueryExecutor")
     private ThreadPoolExecutor orderQueryExecutor;
 
+
+    @Autowired
+    private RefundOrderService refundOrderService;
 
 
 
@@ -371,7 +376,7 @@ public class OrderServiceImpl
                 .status(0) // 0 -> 待付款
 
                 // 支付相关 (预下单时的选择)
-                .paymentType(dto.getPaymentType())
+                //.paymentType(dto.getPaymentType())
                 .payDeadline(deadline)
 
                 // 逻辑删除
@@ -388,7 +393,7 @@ public class OrderServiceImpl
             // 3. 兜底捕获 (最后一道防线)
             // 此时大概率是 ID 生成冲突或极端的并发逻辑漏洞
             log.error("数据库唯一索引冲突！OrderSn: {}, UserId: {}", parentOrder.getOrderSn(), userId);
-            throw new BusinessException("该订单已存在，请勿重复下单！");
+            throw new BusinessException("系统繁忙，订单提交失败，请稍后重试或联系客服");
         }
 
 
@@ -508,7 +513,6 @@ public class OrderServiceImpl
         }
 
 
-
         // 4. 批量入库
         subOrderService.saveBatch(subOrderList);
 
@@ -516,11 +520,8 @@ public class OrderServiceImpl
         orderItemService.saveBatch(allOrderItems);
 
 
-
-
-
         //5.判断商品来源，如果是购物车中的商品，则将Redis和Mysql中对应的数据删除
-        cleanCartItems(userId,dto);
+        cleanCartItems(orderSn, userId, dto);
 
 
 
@@ -541,7 +542,7 @@ public class OrderServiceImpl
 
         //如果优惠券不为空，则锁定优惠券
         if (dto.getCouponUserRecordId() != null) {
-            couponService.lockCoupon(dto.getCouponUserRecordId());
+            couponService.lockCoupon(orderSn, dto.getCouponUserRecordId());
         }
 
 
@@ -564,14 +565,15 @@ public class OrderServiceImpl
                 public void afterCommit() {
                     // --- A. 发送子订单 ES 同步消息（带可靠性保障）---
                     for (SubOrder subOrder : subOrderList) {
-                        sendEsSyncMessage(subOrder.getId(), 1);  // type=1 表示新增
+                        sendEsSyncMessage(orderSn, subOrder.getSubOrderSn(), subOrder.getId(), 1);  // type=1 表示新增
                     }
 
-                    // B. 发送延迟关单消息（先入库再发送，使用 TTL + 死信队列方式）
-                    OrderCancelMessage cancelMessage = new OrderCancelMessage(orderSn, userId);
+                    // B. 发送延迟关单消息
+                    OrderCancelMessage cancelMessage = new OrderCancelMessage(orderSn);
 
                     // 1. 生成消息ID
                     String msgId = UUID.randomUUID().toString();
+
 
                     // 2. 先入库（source_type=0, business_type=1, status=0）
                     MqMessageLog messageLog = MqMessageLog.builder()
@@ -589,34 +591,15 @@ public class OrderServiceImpl
                     mqMessageLogMapper.insert(messageLog);
 
 
-
-                    // 3. 构造 CorrelationData
-                    MqCorrelationData correlationData = new MqCorrelationData(
-                            msgId,
-                            OrderMQConfig.DELAY_EXCHANGE,
-                            OrderMQConfig.DELAY_ROUTING_KEY,
-                            cancelMessage
-                    );
-
-
-                    // 4. 发送消息到延迟交换机（普通 Direct Exchange，支持 mandatory）
+                    // 3. 发送消息到延迟交换机（异常时自动更新数据库状态）
                     // 消息会先进入 delay.queue（TTL=15分钟），过期后自动进入 dlx.exchange → timeout.queue
-                    rabbitTemplate.convertAndSend(
+                    rabbitMQSendUtils.sendMessage(
                             OrderMQConfig.DELAY_EXCHANGE,
                             OrderMQConfig.DELAY_ROUTING_KEY,
-                            //wrongKey,
                             cancelMessage,
-                            message -> {
-                                message.getMessageProperties().setCorrelationId(msgId);
-                                message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                                // 不需要设置 x-delay header，TTL 由队列配置决定
-                                return message;
-                            },
-                            correlationData
+                            msgId
                     );
-                    log.info("已发送延迟关单消息到 TTL 队列，MsgId: {}, OrderSn: {}, UserId: {}, TTL={}分钟",
-                            msgId, orderSn, userId, OrderMQConfig.ORDER_TIMEOUT_MS / 60000);
-                    log.info("事务已提交：已发送 ES 同步消息,OrderSn: {}", orderSn);
+                    log.info("[超时关单-生产者] 消息已发送，主订单号: {}，消息ID: {}", orderSn, msgId);
 
                 }
             });
@@ -636,94 +619,84 @@ public class OrderServiceImpl
 
 
     /**
-     * 取消订单
-     * @param orderSn(主订单编号)
-     * @param userId
+     * 取消主订单
+     * @param parentOrderSn
      * @return
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean cancelOrder(String orderSn, Long userId) {
-        //1.主订单及子订单的状态校验与更新
-        ParentOrder parentOrder = parentOrderMapper.selectBySnAndUserId(orderSn, userId);
-        if (parentOrder == null) {
-            throw new BusinessException("该订单不存在");
+    public void cancelParentOrder(String parentOrderSn) {
+        // 1.乐观锁关闭主订单
+        int parentCloseRows = parentOrderMapper.setStatus(parentOrderSn,
+                OrderStatusConstant.CLOSED, OrderStatusConstant.PENDING_PAY);
+
+        // 主订单关闭失败，判断是幂等还是并发冲突
+        if (parentCloseRows == 0) {
+            handleParentOrderCloseFail(parentOrderSn);
+            return;
         }
 
-        // 幂等性设计：如果订单已经关闭（status=4），直接返回成功，不抛异常
-        if (parentOrder.getStatus() == 4) {
-            log.info("订单已经关闭，幂等性跳过 - 主订单号: {}", orderSn);
-            return true;  // 返回 true 表示"处理成功"，消费者会 ACK
+        // 主订单关闭成功，乐观锁关闭子订单
+        int subCloseRows = subOrderMapper.setStatusByParentSn(parentOrderSn,
+                OrderStatusConstant.CLOSED, OrderStatusConstant.PENDING_PAY);
+
+        // 子订单关闭失败，回滚
+        if (subCloseRows == 0) {
+            log.error("[关闭订单] 主订单更新成功，但子订单更新失败！主订单号：{}", parentOrderSn);
+            throw new BusinessException("子订单状态更新异常，触发事务回滚");
         }
 
-        // 如果订单已支付或其他状态，说明不需要关单，也返回成功（幂等）
-        if (parentOrder.getStatus() != 0) {
-            log.info("订单状态为 {}，无需关单（可能已支付） - 主订单号: {}", parentOrder.getStatus(), orderSn);
-            return true;  // 返回 true 表示"处理成功"，消费者会 ACK
-        }
-
-        //关闭主订单（乐观锁：只有 status=0 才会更新）
-        int rows = parentOrderMapper.setStatusBySnAndUserId(orderSn, userId, 4, 0);
-
-        // 幂等性保障：如果返回 0，说明订单已被其他线程关闭，直接返回成功
-        if (rows == 0) {
-            log.info("订单状态已变更（并发竞争失败），幂等性跳过 - 主订单号: {}", orderSn);
-            return true;
-        }
-
-        //关闭子订单
-        subOrderMapper.setStatusByParentSn(orderSn, userId, 4, 0);
-
-        //2.回补库存
-        // A. 查出该主订单下所有的订单项（OrderItem）
-        // 建议在 orderItemMapper 中写一个根据 parentOrderSn 查询的方法
-        List<OrderItem> orderItems = orderItemMapper.selectByParentSn(orderSn);
-
-
-        // 即使 orderItems 是空的，这段代码也不会崩溃，只会得到一个空的 stockItems 列表
+        // 2.主订单、子订单都关闭成功，执行相关业务逻辑
+        // 2.1 执行库存回补
+        List<OrderItem> orderItems = orderItemMapper.selectByParentSn(parentOrderSn);
+        // 2.1.1查出该主订单下所有的订单项（OrderItem）
         List<OrderItemDTO> stockItems = orderItems.stream()
                 .map(item -> new OrderItemDTO(item.getSkuId(), item.getQuantity()))
                 .collect(Collectors.toList());
-
-        // 只有当列表真的有东西时，才去调 Service
+        // 2.1.2只有当stockItems不为空时，才调用回补库存的方法
         if (!stockItems.isEmpty()) {
-            skuService.rollBackStock(stockItems);
+            skuService.rollBackStock(parentOrderSn,stockItems);
         }
 
-
-        //3.优惠券解锁(如果有的话)
+        // 2.2优惠券解锁(如果有的话)
+        ParentOrder parentOrder = parentOrderMapper.selectBySn(parentOrderSn);
         Long couponUserRecordId = parentOrder.getCouponUserRecordId();
         if (couponUserRecordId != null) {
-            couponService.releaseCoupon(couponUserRecordId);
+            couponService.releaseCoupon(parentOrderSn,couponUserRecordId);
         }
 
+        // 2.3准备 ES 同步：
+        // 查询该主订单下所有的子订单的ID及编号
+        List<SubOrderIdSn> subOrderIdSns = subOrderMapper.selectIdSnByParentSn(parentOrderSn);
 
-        //4.记录日志
-        log.info("订单取消成功 - 主订单号: {}, 涉及商品种类: {} 类",
-                orderSn, stockItems.size());
-
-
-        // 5. 准备 ES 同步：查询该主订单下所有的子订单 ID
-        List<Long> subOrderIds = subOrderMapper.selectIdsByParentSn(orderSn);
-
-        // 6. 注册事务提交后的钩子，发送同步消息
+        // 2.4注册事务提交后的钩子，发送同步消息
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    for (Long subId : subOrderIds) {
-                        sendEsSyncMessage(subId, 2);  // type=2 表示更新（取消/关闭）
+                    for (SubOrderIdSn idSn : subOrderIdSns) {
+                        sendEsSyncMessage(parentOrderSn, idSn.getSubOrderSn(), idSn.getId(), 2);  // type=2 表示更新（取消/关闭）
                     }
-                    log.info("订单取消事务已提交，已发送 {} 条子订单 ES 同步消息", subOrderIds.size());
+                    log.info("[取消订单] 主订单号 {} 取消事务已提交，已发送 {} 条子订单 ES 同步消息", parentOrderSn, subOrderIdSns.size());
                 }
             });
         }
-
-
-        return true;
-
     }
 
+    // 处理取消主订单失败的情况
+    private void handleParentOrderCloseFail(String parentOrderSn) {
+        ParentOrder parentOrder = parentOrderMapper.selectBySn(parentOrderSn);
+
+        // 1.幂等判断：如果订单已经关闭，直接返回
+        if (Objects.equals(parentOrder.getStatus(), OrderStatusConstant.CLOSED)) {
+            log.info("[取消订单] 订单已经关闭，幂等性跳过 - 主订单号: {}", parentOrderSn);
+        }
+
+        // 如果订单已支付或其他状态，说明不需要关单，也直接返回
+        if (!Objects.equals(parentOrder.getStatus(), OrderStatusConstant.PENDING_PAY)) {
+            log.info("[取消订单] 订单状态为 {}，无需关单 - 主订单号: {}", parentOrder.getStatus(), parentOrderSn);
+        }
+    }
 
 
     /**
@@ -804,107 +777,153 @@ public class OrderServiceImpl
 
 
     /**
-     * 支付成功
-     * @param orderSn（主订单）
+     * 支付成功(返回给第三方支付接口)
+     * @param orderSn 主订单或子订单编号
      * @param paymentType
      * @return
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean paySuccess(String orderSn, Integer paymentType) {
+    public void paySuccess(String orderSn, Integer paymentType) {
+        // 1.先假设它是主订单
+        ParentOrder parentOrder = parentOrderMapper.selectBySn(orderSn);
+        if (parentOrder != null) {
+             parentOrderPaySuccess(parentOrder, paymentType);
+             return;
+        }
 
+        // 2.主订单没查到，再假设它是子订单
+        SubOrder subOrder = subOrderMapper.selectByOrderSn(orderSn);
+        if (subOrder != null) {
+             subOrderPaySuccess(subOrder, paymentType);
+             return;
+        }
 
-            // 1. 查出订单,判断订单是否存在
-            //由于需要手机扫码测试，这里直接根据订单Sn查，先不传userId
-            ParentOrder parentOrder = parentOrderMapper.selectBySn(orderSn);
-            SubOrder subOrder = subOrderMapper.selectByOrderSn(orderSn);
-            if (parentOrder == null && subOrder == null) {
-                throw new BusinessException("订单不存在");
-            }
-            if (parentOrder != null) {
-               return parentOrderPaySuccess(orderSn,paymentType);
-            }
-
-            return subOrderPaySuccess(orderSn,paymentType);
+        // 3.两个表都查不到，抛出订单不存在异常！
+        throw new BusinessException("订单不存在");
     }
 
 
     /**
      * 主订单支付成功
-     * @param parentOrderSn
+     * @param parentOrder,paymentType
      * @return
      */
-    private boolean parentOrderPaySuccess(String parentOrderSn,Integer paymentType) {
-        // 1. 行锁查询，保证并发安全
-        ParentOrder parentOrder = parentOrderMapper.selectBySnForUpdate(parentOrderSn);
-
-        // 2. 幂等判断：如果状态已经不是待支付(0)，说明处理过了
-        if (parentOrder.getStatus() != 0) {
-            return true;
-        }
-
-        // 3. 时间校验：防止超时支付导致的库存/优惠券逻辑混乱
-        if (LocalDateTime.now().isAfter(parentOrder.getPayDeadline())) {
-            throw new BusinessException("订单已超时！");
-        }
-
-        // 4. 一次性更新状态和支付信息
+    private void parentOrderPaySuccess(ParentOrder parentOrder,Integer paymentType) {
+        String parentOrderSn =  parentOrder.getOrderSn();
         LocalDateTime paymentTime = LocalDateTime.now();
-        parentOrderMapper.updatePayInfo(parentOrderSn, OrderStatusConstant.PENDING_SHIP, paymentType, paymentTime);
-        subOrderMapper.updatePayInfoByParentSn(parentOrderSn, OrderStatusConstant.PENDING_SHIP, paymentType, paymentTime);
 
-        // 5. 核销优惠券
+        // 1.乐观锁更新主订单
+        int rowsPar = parentOrderMapper.updatePayInfo(parentOrderSn, OrderStatusConstant.PENDING_SHIP,
+                paymentType, paymentTime, OrderStatusConstant.PENDING_PAY);
+
+        // 主订单更新失败，判断是幂等处理还是发生冲突
+        if (rowsPar == 0) {
+            handleParentOrderPayFail(parentOrder);
+            return;
+        }
+        // 主订单更新成功，乐观锁更新子订单
+        int rowsSub = subOrderMapper.updatePayInfoByParentSn(parentOrderSn, OrderStatusConstant.PENDING_SHIP,
+                paymentType, paymentTime, OrderStatusConstant.PENDING_PAY);
+        // 主订单更新成功，但是子订单更新失败
+        if (rowsSub == 0) {
+            log.error("[主订单支付] 主订单更新成功，但子订单更新失败！主订单号：{}", parentOrderSn);
+            throw new BusinessException("子订单状态更新异常，触发事务回滚");
+        }
+
+        // 2.主订单、子订单都更新成功，开始执行相关业务逻辑
+        // 2.1 核销优惠券
         if (parentOrder.getCouponUserRecordId() != null) {
             couponService.useCoupon(parentOrder.getCouponUserRecordId());
         }
 
-        // 6. 更新商品销量
+        // 2.2 更新商品销量
         List<OrderItem> orderItems = orderItemMapper.selectByParentSn(parentOrderSn);
         updateSales(orderItems);
 
-        // 7. 注册事务钩子同步 ES (保持你原来的写法，很棒)
+        // 2.3 注册事务钩子同步 ES
         registerEsSyncHook(parentOrderSn);
-
-        return true;
     }
 
+    // 处理主订单更新失败时的情况
+    private void handleParentOrderPayFail(ParentOrder parentOrder) {
+        String parentOrderSn =  parentOrder.getOrderSn();
+        // 1.幂等判断：如果状态是待发货，说明已经支付过了
+        if (Objects.equals(parentOrder.getStatus(), OrderStatusConstant.PENDING_SHIP)) {
+            log.info("[主订单支付] 幂等判断，订单已支付，订单号：{}", parentOrderSn);
+            return;
+        }
+        // 2.并发判断：如果状态是已关闭，说明已经关闭了
+        if (Objects.equals(parentOrder.getStatus(), OrderStatusConstant.CLOSED)) {
+            BigDecimal payAmount = parentOrder.getPayAmount();
+            // 1.将主订单的退款状态设置为“进行中”
+            parentOrderMapper.setRefundStatus(parentOrderSn,
+                    OrderRefundStatusConstant.REFUNDING,
+                    OrderRefundStatusConstant.NO_REFUND);
+
+            // 2.将子订单的退款状态设置为“进行中”
+            subOrderMapper.setRefundStatusByParentSn(parentOrderSn,
+                    OrderRefundStatusConstant.REFUNDING,
+                    OrderRefundStatusConstant.NO_REFUND);
+
+            // 3.记录退款诉求，向数据库插入一条退款单
+            refundOrderService.createSystemRefund(parentOrderSn, payAmount, "订单超时关闭自动退款");
+            log.info("[主订单支付] 并发冲突判断，订单已关闭但用户已支付，提交退款单，主订单号：{}", parentOrderSn);
+        }
+    }
 
 
     /**
      * 子订单支付成功(默认无优惠券)
-     * @param subOrderSn
+     * @param subOrder
+     * @param paymentType
      * @return
      */
-    private boolean subOrderPaySuccess(String subOrderSn,Integer paymentType) {
-        // 1. 行锁查询，保证并发安全
-        SubOrder subOrder = subOrderMapper.selectByOrderSn(subOrderSn);
-
-        // 2. 幂等判断：如果状态已经不是待支付(0)，说明处理过了
-        if (subOrder.getStatus() != 0) {
-            return true;
-        }
-
-        // 3. 时间校验：防止超时支付导致的库存/优惠券逻辑混乱
-        if (LocalDateTime.now().isAfter(subOrder.getPayDeadline())) {
-            throw new BusinessException("订单已超时！");
-        }
-
-        // 4. 一次性更新状态和支付信息
+    private void subOrderPaySuccess(SubOrder subOrder,Integer paymentType) {
+        String subOrderSn =  subOrder.getSubOrderSn();
         LocalDateTime paymentTime = LocalDateTime.now();
-        subOrderMapper.updatePayInfoBySubSn(subOrderSn, OrderStatusConstant.PENDING_SHIP, paymentType, paymentTime);
 
+        // 乐观锁更新子订单
+        int rowsSub = subOrderMapper.updatePayInfo(subOrderSn, OrderStatusConstant.PENDING_SHIP,
+                paymentType, paymentTime, OrderStatusConstant.PENDING_PAY);
 
-        // 5. 核心逻辑：联动检查父订单,判断父订单下的子订单是否都已经支付
-        checkAndPayParentOrder(subOrder.getParentOrderSn());
+        // 子订单更新失败，判断是幂等处理还是发生冲突
+        if (rowsSub == 0) {
+            handleSubOrderPayFail(subOrder);
+            return;
+        }
 
-        // 6. 更新商品销量
+        // 2.主订单、子订单都更新成功，开始执行相关业务逻辑
+        // 2.1 核销优惠券(这里先不处理)
+
+        // 2.2 更新商品销量
         List<OrderItem> orderItems = orderItemMapper.selectBySubSn(subOrderSn);
         updateSales(orderItems);
 
-        // 7. 注册事务钩子同步 ES (保持你原来的写法，很棒)
+        // 2.3 注册事务钩子同步 ES
         registerEsSyncHook(subOrderSn);
+    }
 
-        return true;
+    // 处理子订单更新失败时的情况
+    private void handleSubOrderPayFail(SubOrder subOrder) {
+        String subOrderSn =  subOrder.getSubOrderSn();
+        // 1.幂等判断：如果状态是待发货，说明已经支付过了
+        if (Objects.equals(subOrder.getStatus(), OrderStatusConstant.PENDING_SHIP)) {
+            log.info("[子订单支付] 幂等判断，订单已支付，订单号：{}", subOrderSn);
+            return;
+        }
+        // 2.并发判断：如果状态是已关闭，说明已经关闭了
+        if (Objects.equals(subOrder.getStatus(), OrderStatusConstant.CLOSED)) {
+            BigDecimal payAmount = subOrder.getPayAmount();
+            // 1.将子订单的退款状态设置为“进行中”
+            subOrderMapper.setRefundStatus(subOrderSn,
+                    OrderRefundStatusConstant.REFUNDING,
+                    OrderRefundStatusConstant.NO_REFUND);
+
+            // 2.记录退款诉求，向数据库插入一条退款单
+            refundOrderService.createSystemRefund(subOrderSn, payAmount, "订单超时关闭自动退款");
+            log.info("[子订单支付] 并发冲突判断，订单已关闭但用户已支付，提交退款单，子订单号：{}", subOrderSn);
+        }
     }
 
 
@@ -920,36 +939,39 @@ public class OrderServiceImpl
         if (unPaid == 0) {
             log.info("父订单 {} 下所有子订单已支付，更新父订单状态", parentOrderSn);
             // 更新父订单表状态
-            parentOrderMapper.updateStatus(parentOrderSn, OrderStatusEnum.WAIT_DELIVERY.getCode());
-            // 如果你以后给父订单建了 ES 索引，记得在这里也 update 一下
+            parentOrderMapper.updateStatus(parentOrderSn, OrderStatusConstant.PENDING_SHIP);
         }
     }
 
 
     /**
-     * 将子订单数据同步到ES
+     * 将主订单关联的子订单数据同步到ES
      * @param orderSn
      */
     private void registerEsSyncHook(String orderSn) {
-        // 5. 发送 MQ 消息同步 ES 状态
-        // 注意：这里需要先获取该主订单下的所有子订单 ID
-        List<Long> subOrderIds = new ArrayList<>();
-        ParentOrder parentOrder = parentOrderMapper.selectBySn(orderSn);
-        SubOrder subOrder = subOrderMapper.selectByOrderSn(orderSn);
-        if (parentOrder != null) {
-            subOrderIds.addAll(subOrderMapper.selectIdsByParentSn(orderSn));
-        }
-        else {
-            subOrderIds.add(subOrder.getId());
-        }
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    for (Long subId : subOrderIds) {
-                        sendEsSyncMessage(subId, 2);  // type=2 表示更新
+                    // 1. 试图作为主单查子单 (如果业务仍有可能是主单回调)
+                    List<SubOrderIdSn> subList = subOrderMapper.selectIdSnByParentSn(orderSn);
+                    if (subList != null && !subList.isEmpty()) {
+                        // 如果是主单，同步其下所有子单
+                        for (SubOrderIdSn idSn : subList) {
+                            sendEsSyncMessage(orderSn, idSn.getSubOrderSn(), idSn.getId(), 2);
+                        }
+                        log.info("[ES同步-支付成功] 事务已提交，发送 {} 条同步消息", subList.size());
+                    } else {
+                        // 2. 如果主单查不到，说明它是子单号
+                        SubOrder SubOrder = subOrderMapper.selectByOrderSn(orderSn);
+                        if (SubOrder != null) {
+                            sendEsSyncMessage(SubOrder.getParentOrderSn(), orderSn, SubOrder.getId(), 2);
+                            log.info("[ES同步-支付成功] 事务已提交，发送 1 条同步消息");
+                        } else {
+                            log.error("[ES同步-支付成功] 事务提交后找不到子订单：{}", orderSn);
+                            throw new BusinessException("ES同步消息发送失败，找不到订单");
+                        }
                     }
-                    log.info("支付成功事务已提交，已发送 {} 条子订单同步消息", subOrderIds.size());
                 }
             });
         }
@@ -976,7 +998,7 @@ public class OrderServiceImpl
             stringRedisTemplate.opsForZSet().incrementScore(SPU_SALES_RANK_KEY, String.valueOf(spuId), quantity);
         }
 
-        log.info("销量更新成功，共更新 {} 个商品", orderItems.size());
+        log.info("[SPU销量更新] 销量更新成功，共更新 {} 个商品", orderItems.size());
     }
 
 
@@ -1115,7 +1137,8 @@ public class OrderServiceImpl
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    sendEsSyncMessage(subOrderId, 2);  // type=2 表示更新
+                    sendEsSyncMessage(subOrder.getParentOrderSn(),
+                            subOrderSn,subOrderId, 2);  // type=2 表示更新
                     log.info("确认收货事务已提交，已发出 ES 同步消息，子订单ID: {}", subOrderId);
                 }
             });
@@ -1128,8 +1151,14 @@ public class OrderServiceImpl
      * @param parentOrderSn
      */
     @Override
-    public Integer getParentOrderStatus(String parentOrderSn) {
-        return parentOrderMapper.selectStatus(parentOrderSn);
+    public OrderStatusVO getParentOrderStatus(String parentOrderSn) {
+        // 1.查询订单状态及退款状态
+        Integer status = parentOrderMapper.selectStatus(parentOrderSn);
+        Integer refundStatus = parentOrderMapper.selectRefundStatus(parentOrderSn);
+
+        // 2. 核心逻辑：根据底层状态组合，映射前端展示状态
+        // 优先判断订单状态，再判断退款状态
+        return FrontOrderDisplayStatus.translate(status, refundStatus);
     }
 
     /**
@@ -1137,8 +1166,13 @@ public class OrderServiceImpl
      * @param subOrderSn
      */
     @Override
-    public Integer getSubOrderStatus(String subOrderSn) {
-        return subOrderMapper.selectStatus(subOrderSn);
+    public OrderStatusVO getSubOrderStatus(String subOrderSn) {
+        // 1.查询订单状态及退款状态
+        Integer status = subOrderMapper.selectStatus(subOrderSn);
+        Integer refundStatus = subOrderMapper.selectRefundStatus(subOrderSn);
+        // 2. 核心逻辑：根据底层状态组合，映射前端展示状态
+        // 优先判断订单状态，再判断退款状态
+        return FrontOrderDisplayStatus.translate(status, refundStatus);
     }
 
 
@@ -1188,65 +1222,6 @@ public class OrderServiceImpl
 
 
 
-
-    /**
-     * 子订单支付成功
-     * @param subOrderSn
-     * @param paymentType
-     * @return
-     */
-    @Override
-    public boolean payResumeSuccess(String subOrderSn, Integer paymentType) {
-        //Long userId = UserHolder.getUser().getId();
-
-        // 1. 查出订单
-        //由于需要手机扫码测试，这里直接根据订单Sn查，先不传userId
-        SubOrder subOrder = subOrderMapper.selectByOrderSn(subOrderSn);
-
-
-        // 2. 状态判断（幂等性保护）
-        if (subOrder == null) {
-            throw new BusinessException("订单不存在");
-        }
-
-
-        if (subOrder.getStatus() != 0) {
-            log.warn("订单 {} 状态已变更为 {}，跳过支付逻辑", subOrder, subOrder.getStatus());
-            return true; // 已经处理过了，直接回成功
-        }
-
-        // 3. 修改主订单和子订单状态
-        //这里由于要用手机扫码测试，没有token，就先直接设置订单状态了，不用userId；
-        subOrderMapper.setStatusBySubOrderSn(subOrderSn, OrderStatusConstant.PENDING_SHIP);
-
-
-        //修改子订单支付类型和时间
-        LocalDateTime paymentTime = LocalDateTime.now();
-        subOrderMapper.setPaymentType(subOrderSn,paymentType,paymentTime);
-
-
-
-        //4.核销优惠券(如果有使用优惠券)
-        //如果单独支付子订单优惠券这里先释放掉
-        ParentOrder parentOrder = parentOrderMapper.selectBySn(subOrder.getParentOrderSn());
-        couponService.releaseCoupon(parentOrder.getCouponUserRecordId());
-
-
-        // 5. 发送 MQ 消息同步 ES 状态（带可靠性保障）
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    sendEsSyncMessage(subOrder.getId(), 2);  // type=2 表示更新
-                    log.info("支付成功事务已提交，已发送1条子订单同步消息");
-                }
-            });
-        }
-
-
-        log.info("💰 订单 {} 支付成功！", subOrderSn);
-        return true;
-    }
 
 
 
@@ -1475,7 +1450,7 @@ public class OrderServiceImpl
      * @param userId 用户ID
      * @param dto    包含店铺和商品信息的提交对象
      */
-    private void cleanCartItems(Long userId, OrderSubmitDTO dto) {
+    private void cleanCartItems(String orderSn, Long userId, OrderSubmitDTO dto) {
         // 1. 判断来源，非购物车来源直接跳过
         if (!Objects.equals(dto.getSource(), 2)) {
             return;
@@ -1499,16 +1474,16 @@ public class OrderServiceImpl
             Object[] fields = skuIds.stream().map(String::valueOf).toArray();
             Long deletedCount = stringRedisTemplate.opsForHash().delete(cartRedisKey, fields);
             // 记录日志：打印本次操作的用户、ID列表以及实际删除的数量
-            log.info("清理购物车Redis记录成功 | 用户ID: {} | 尝试清理SKUs: {} | 实际移除数量: {}",
-                    userId, skuIds, deletedCount);
+            log.info("[移除购物车] 缓存移除成功，主订单号：{}，移除数量: {}",
+                    orderSn,deletedCount);
         } catch (Exception e) {
             // Redis 失败通常不抛出异常中断下单，记录日志即可，以 MySQL 为准
-            log.error("清理用户[{}]购物车Redis数据失败: {}", userId, e.getMessage());
+            log.error("[移除购物车] 缓存移除失败，主订单号：{}，原因：{}", orderSn, e.getMessage());
         }
 
         // 4. 清理 MySQL 数据库 (核心逻辑，靠事务保证一致性)
         int rows = cartItemMapper.deleteByUserIdAndSkuIds(userId, skuIds);
-        log.info("清理用户[{}]购物车数据库记录共 {} 条", userId, rows);
+        log.info("[移除购物车] 数据库移除成功，主订单号：{}，移除数量：{}", orderSn, rows);
     }
 
 
@@ -1684,11 +1659,8 @@ public class OrderServiceImpl
      * @param subOrderId 子订单ID
      * @param type       操作类型：1-新增，2-更新，3-删除
      */
-    private void sendEsSyncMessage(Long subOrderId, Integer type) {
+    private void sendEsSyncMessage(String parentOrderSn, String subOrderSn, Long subOrderId, Integer type) {
         OrderSyncMessage syncMessage = new OrderSyncMessage(subOrderId, type);
-
-
-
 
         // 1. 生成消息ID
         String msgId = UUID.randomUUID().toString();
@@ -1708,33 +1680,15 @@ public class OrderServiceImpl
                 .build();
         mqMessageLogMapper.insert(messageLog);
 
-        // 3. 构造 CorrelationData
-        MqCorrelationData correlationData = new MqCorrelationData(
-                msgId,
+        // 3. 发送消息（异常时自动更新数据库状态）
+        rabbitMQSendUtils.sendMessage(
                 SubOrderMQConfig.SUB_ORDER_EXCHANGE,
                 SubOrderMQConfig.SUB_ORDER_SYNC_ROUTING_KEY,
-                syncMessage
-        );
-
-
-        //模拟路由失败
-        String wrongKey = "invalidKey";
-
-        // 4. 发送消息
-        rabbitTemplate.convertAndSend(
-                SubOrderMQConfig.SUB_ORDER_EXCHANGE,
-                //SubOrderMQConfig.SUB_ORDER_SYNC_ROUTING_KEY,
-                wrongKey,
                 syncMessage,
-                message -> {
-                    message.getMessageProperties().setCorrelationId(msgId);
-                    message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                    return message;
-                },
-                correlationData
+                msgId
         );
 
-        log.info("📝 [ES同步] 已发送同步消息，MsgId: {}, SubOrderId: {}, Type: {}", msgId, subOrderId, type);
+       log.info("[ES同步-生产者] 消息已发送，主订单号：{}，子订单号：{}，消息ID:{}", parentOrderSn, subOrderSn, msgId);
     }
 
 }

@@ -1,6 +1,6 @@
 package com.github.shangtanlin.controller;
 
-import com.github.shangtanlin.model.dto.ProductQueryDTO;
+import com.github.shangtanlin.model.dto.product.ProductQueryDTO;
 import com.github.shangtanlin.result.PageResult;
 import com.github.shangtanlin.result.Result;
 import com.github.shangtanlin.service.ProductService;

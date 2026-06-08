@@ -1,14 +1,15 @@
 package com.github.shangtanlin.task;
 
 import com.alibaba.fastjson.JSON;
+import com.github.shangtanlin.common.utils.RabbitMQConsumeUtils;
+import com.github.shangtanlin.config.mq.OrderMQConfig;
 import com.github.shangtanlin.mapper.mq.MqMessageLogMapper;
-import com.github.shangtanlin.model.dto.es.OrderSyncMessage;
-import com.github.shangtanlin.model.dto.mq.MqCorrelationData;
-import com.github.shangtanlin.model.dto.order.OrderCancelMessage;
 import com.github.shangtanlin.model.entity.mq.MqMessageLog;
-import com.github.shangtanlin.mq.cart.CartWriteBackMessage;
+import com.github.shangtanlin.mq.message.OrderCancelMessage;
+import com.github.shangtanlin.mq.message.OrderSyncMessage;
+import com.github.shangtanlin.mq.message.CartWriteBackMessage;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.MessageDeliveryMode;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -29,7 +30,7 @@ public class MqMessageRetryTask {
     /**
      * 最大重试次数
      */
-    private static final int MAX_RETRY_COUNT = 10;
+    private static final int MAX_RETRY_COUNT = 3;
 
     /**
      * 业务类型常量
@@ -44,6 +45,9 @@ public class MqMessageRetryTask {
     @Autowired
     private RabbitTemplate rabbitTemplate;
 
+    @Autowired
+    private RabbitMQConsumeUtils rabbitMQSendUtils;
+
     /**
      * 每分钟扫描一次待重试的发送失败消息
      */
@@ -55,14 +59,14 @@ public class MqMessageRetryTask {
             return;
         }
 
-        log.info("定时任务开始补偿发送 MQ 消息，共 {} 条", failLogs.size());
+        log.info("[消息补发] 定时任务开始补偿发送 MQ 消息，共 {} 条", failLogs.size());
 
         for (MqMessageLog failLog : failLogs) {
             try {
                 // 1. 检查重试次数，达到上限则标记为人工处理
                 if (failLog.getRetryCount() >= MAX_RETRY_COUNT) {
                     mqMessageLogMapper.markManualProcessed(failLog.getId());
-                    log.error("消息 ID: {} 重试次数已达上限({})，转为人工处理！", failLog.getId(), MAX_RETRY_COUNT);
+                    log.error("[消息补发] 消息 ID: {} 重试次数已达上限({})，转为人工处理！", failLog.getId(), MAX_RETRY_COUNT);
                     continue;
                 }
 
@@ -70,18 +74,13 @@ public class MqMessageRetryTask {
                 Object messageObj = deserializeByBusinessType(failLog);
 
                 if (messageObj == null) {
-                    log.error("无法反序列化消息，ID: {}, businessType: {}", failLog.getId(), failLog.getBusinessType());
+                    log.error("[消息补发] 无法反序列化消息，ID: {}, businessType: {}", failLog.getId(), failLog.getBusinessType());
                     mqMessageLogMapper.markManualProcessed(failLog.getId());
                     continue;
                 }
 
                 // 3. 构造 CorrelationData
-                MqCorrelationData cd = new MqCorrelationData(
-                        failLog.getId(),
-                        failLog.getExchange(),
-                        failLog.getRoutingKey(),
-                        messageObj
-                );
+                CorrelationData cd = new CorrelationData(failLog.getId());
 
                 // 4. 更新数据库：重试次数+1，状态改为发送中，设置下次重试时间
                 int newRetryCount = failLog.getRetryCount() + 1;
@@ -92,23 +91,26 @@ public class MqMessageRetryTask {
                 mqMessageLogMapper.updateRetryInfo(failLog);
 
                 // 5. 重新投递
-                rabbitTemplate.convertAndSend(
+                rabbitMQSendUtils.sendMessage(
                         failLog.getExchange(),
                         failLog.getRoutingKey(),
                         messageObj,
-                        message -> {
-                            message.getMessageProperties().setCorrelationId(failLog.getId());
-                            message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                            return message;
-                        },
-                        cd
+                        failLog.getId()
                 );
 
-                log.info("已触发消息补发，ID: {}, businessType: {}, 当前重试次数: {}",
-                        failLog.getId(), failLog.getBusinessType(), newRetryCount);
+
+                String msgTypeName = switch (failLog.getBusinessType()) {
+                    case 0 -> "购物车写回";
+                    case 1 -> "订单超时关闭";
+                    case 2 -> "ES同步";
+                    default -> "未知";
+                };
+
+                log.info("[消息补发] 已触发消息补发，ID: {}, 业务类型: {}, 当前重试次数: {}",
+                        failLog.getId(), msgTypeName, newRetryCount);
 
             } catch (Exception e) {
-                log.error("重试发送消息发生异常，ID: {}", failLog.getId(), e);
+                log.error("[消息补发] 重试发送消息发生异常，ID: {}", failLog.getId(), e);
             }
         }
     }
@@ -135,7 +137,7 @@ public class MqMessageRetryTask {
                 // 子订单ES同步消息
                 return JSON.parseObject(payload, OrderSyncMessage.class);
             default:
-                log.warn("未知的业务类型: {}, ID: {}", businessType, failLog.getId());
+                log.warn("[消息补发] 未知的业务类型: {}, ID: {}", businessType, failLog.getId());
                 return null;
         }
     }
@@ -144,10 +146,9 @@ public class MqMessageRetryTask {
      * 每小时清理所有成功的消息记录
      */
     @Scheduled(cron = "0 0 * * * ?")
+    //@Scheduled(fixedRate = 10_000)
     public void cleanSuccessRecords() {
         int deleted = mqMessageLogMapper.deleteSuccessAll();
-        if (deleted > 0) {
-            log.info("清理成功消息记录，删除 {} 条", deleted);
-        }
+        log.info("[本地消息表清理] 共删除 {} 条消息", deleted);
     }
 }

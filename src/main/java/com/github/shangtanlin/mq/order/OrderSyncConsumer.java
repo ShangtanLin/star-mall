@@ -3,13 +3,13 @@ package com.github.shangtanlin.mq.order;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch.core.IndexResponse;
 import com.alibaba.fastjson.JSON;
+import com.github.shangtanlin.common.utils.RabbitMQConsumeUtils;
 import com.github.shangtanlin.config.mq.SubOrderMQConfig;
+import com.github.shangtanlin.mapper.OrderMapper;
 import com.github.shangtanlin.mapper.ParentOrderMapper;
 import com.github.shangtanlin.mapper.SubOrderMapper;
-import com.github.shangtanlin.mapper.mq.MqMessageLogMapper;
-import com.github.shangtanlin.model.dto.es.OrderSyncMessage;
+import com.github.shangtanlin.mq.message.OrderSyncMessage;
 import com.github.shangtanlin.model.dto.es.SubOrderIndexDoc;
-import com.github.shangtanlin.model.entity.mq.MqMessageLog;
 import com.github.shangtanlin.model.entity.order.ParentOrder;
 import com.github.shangtanlin.model.entity.order.SubOrder;
 import com.github.shangtanlin.model.vo.order.SubOrderVO;
@@ -27,8 +27,6 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -50,7 +48,9 @@ public class OrderSyncConsumer {
     private SubOrderMapper subOrderMapper;
 
     @Autowired
-    private MqMessageLogMapper mqMessageLogMapper;
+    private RabbitMQConsumeUtils rabbitMQConsumeUtils;
+    @Autowired
+    private OrderMapper orderMapper;
 
     /**
      * 监听子订单 ES 同步队列（手动 ACK 模式）
@@ -66,16 +66,17 @@ public class OrderSyncConsumer {
                                    Channel channel) throws IOException {
 
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        String msgId = message.getMessageProperties().getCorrelationId();
 
         // 1. 检查重试次数（从 x-death header 获取）
-        long retryCount = getRetryCount(message);
+        long retryCount = rabbitMQConsumeUtils.getRetryCount(message);
 
-        log.info("📝 [ES同步] 收到消息 | SubOrderId: {}, Type: {}, 重试次数: {}",
-                syncMessage.getSubOrderId(), syncMessage.getType(), retryCount);
+        log.info("[ES同步-消费者] 收到消息，消息ID:{}, 当前重试次数:{}",
+                msgId, retryCount);
 
         // 2. 基础校验
         if (syncMessage == null || syncMessage.getSubOrderId() == null) {
-            log.warn("📝 [ES同步] 收到无效消息，直接丢弃并签收");
+            log.warn("[ES同步-消费者] 收到无效消息，直接丢弃并签收");
             channel.basicAck(deliveryTag, false);
             return;
         }
@@ -84,9 +85,9 @@ public class OrderSyncConsumer {
         Integer type = syncMessage.getType();
 
         try {
-            // 模拟异常
-            SubOrder subOrder = null;
-            subOrder.getId();
+             //模拟异常
+            //SubOrder subOrder = null;
+            //subOrder.getId();
 
             // 3. 根据类型分流处理
             if (type == 1 || type == 2) {
@@ -94,64 +95,40 @@ public class OrderSyncConsumer {
             } else if (type == 3) {
                 handleDelete(subOrderId);
             } else {
-                log.warn("📝 [ES同步] 未知的操作类型: {}, SubOrderId: {}", type, subOrderId);
+                log.warn("[ES同步-消费者] 未知的操作类型:{}, 消息ID:{}", type, msgId);
             }
 
             // 4. 业务成功，手动确认
             channel.basicAck(deliveryTag, false);
-            log.info("📝 [ES同步] 消息处理成功并已签收 | SubOrderId: {}", subOrderId);
+            log.info("[ES同步-消费者] 消息处理成功并已签收，消息ID:{}", msgId);
 
         } catch (Exception e) {
-            log.error("📝 [ES同步] 业务报错 | SubOrderId: {}, 重试次数: {}, 错误: {}, 时间: {}",
-                    subOrderId, retryCount, e.getMessage(), LocalDateTime.now().format(FORMATTER));
+            log.error("[ES同步-消费者] 业务报错，错误:{}，消息ID:{}",
+                    e.getMessage(), msgId);
 
             // 5. 判断是否达到最大重试次数
             if (retryCount >= SubOrderMQConfig.MAX_RETRY_COUNT) {
-                log.error("📝 [ES同步] 重试耗尽 | SubOrderId: {} 已达到最大重试次数 {}, 执行最终处理",
-                        subOrderId, SubOrderMQConfig.MAX_RETRY_COUNT);
-                handleFinalFailure(syncMessage, e);
+                rabbitMQConsumeUtils.handleFinalFailure(syncMessage, 2,
+                SubOrderMQConfig.SUB_ORDER_EXCHANGE,
+                SubOrderMQConfig.SUB_ORDER_SYNC_ROUTING_KEY,
+                SubOrderMQConfig.MAX_RETRY_COUNT,
+                e.getMessage(),
+                msgId);
                 channel.basicAck(deliveryTag, false);  // 确认消息，不再重试
+                log.error("[ES同步-消费者] 达到最大重试次数，消息入库并签收，消息ID:{}",msgId);
             } else {
                 // 未达到最大重试次数，拒绝消息并进入死信队列
-                log.warn("📝 [ES同步] 进入死信队列 | SubOrderId: {}, 等待 TTL 后重新消费",
-                        subOrderId);
                 channel.basicReject(deliveryTag, false);
             }
         }
     }
 
-    /**
-     * 从消息头获取重试次数（x-death header）
-     */
-    private long getRetryCount(Message message) {
-        try {
-            List<Map<String, ?>> xDeath = message.getMessageProperties().getXDeathHeader();
-
-            if (xDeath != null && !xDeath.isEmpty()) {
-                for (Map<String, ?> deathRecord : xDeath) {
-                    String queue = (String) deathRecord.get("queue");
-                    // 找到来自死信队列的记录（重试队列）
-                    if (queue != null && queue.contains("dlx")) {
-                        Object countObj = deathRecord.get("count");
-                        return countObj != null ? Long.parseLong(countObj.toString()) : 0L;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.warn("📝 [ES同步] 解析重试次数失败: {}", e.getMessage());
-        }
-        return 0L;
-    }
-
-    /**
-     * ES 同步：新增或更新
-     */
     private void handleSaveOrUpdate(Long subOrderId) throws IOException {
         // 1. 反查数据库：获取最全的订单数据
         SubOrderVO fullOrder = subOrderService.getDetailForEs(subOrderId);
 
         if (fullOrder == null) {
-            log.warn("📝 [ES同步] 数据库中未找到子订单 {}, 可能已被删除", subOrderId);
+            log.warn("[ES同步-消费者] 数据库中未找到子订单 {}, 可能已被删除", subOrderId);
             return;
         }
 
@@ -174,50 +151,20 @@ public class OrderSyncConsumer {
                 .document(doc)
         );
 
-        log.info("📝 [ES同步] 成功 | SubOrderId: {}, ES响应: {}", subOrderId, response.result());
+        log.info("[ES同步-消费者] 新增/修改成功，子订单号: {}", subOrder.getSubOrderSn());
     }
 
     /**
      * ES 同步：删除
      */
     private void handleDelete(Long subOrderId) throws IOException {
+        SubOrder subOrder = subOrderMapper.selectById(subOrderId);
+
         elasticsearchClient.delete(d -> d
                 .index("sub_order_index")
                 .id(subOrderId.toString())
         );
-        log.info("📝 [ES同步] 删除成功 | SubOrderId: {}", subOrderId);
-    }
-
-    /**
-     * 最终失败后的处理（落库）
-     */
-    private void handleFinalFailure(OrderSyncMessage msg, Exception e) {
-        log.error("📝 [ES同步] 最终处理 | 记录失败消息到数据库: SubOrderId: {}, Error: {}",
-                msg.getSubOrderId(), e.getMessage());
-
-        try {
-            String newId = UUID.randomUUID().toString();
-
-            MqMessageLog messageLog = MqMessageLog.builder()
-                    .id(newId)
-                    .sourceType(1)  // 1-消费者端
-                    .businessType(2)  // 2-子订单ES同步
-                    .exchange(SubOrderMQConfig.SUB_ORDER_EXCHANGE)
-                    .routingKey(SubOrderMQConfig.SUB_ORDER_SYNC_ROUTING_KEY)
-                    .payload(JSON.toJSONString(msg))
-                    .status(4)  // 4-人工处理
-                    .retryCount(SubOrderMQConfig.MAX_RETRY_COUNT)
-                    .cause("subOrderId=" + msg.getSubOrderId() + ", type=" + msg.getType() + ", error=" + e.getMessage())
-                    .nextRetryTime(null)
-                    .build();
-
-            mqMessageLogMapper.insert(messageLog);
-            log.info("📝 [ES同步] 失败消息已入库: 新ID={}, SubOrderId={}", newId, msg.getSubOrderId());
-
-        } catch (Exception dbEx) {
-            log.error("📝 [ES同步] 致命错误 | 失败消息入库失败! SubOrderId: {}, Error: {}",
-                    msg.getSubOrderId(), dbEx.getMessage());
-        }
+        log.info("[ES同步-消费者] 删除成功，子订单号: {}", subOrder.getSubOrderSn());
     }
 
     /**

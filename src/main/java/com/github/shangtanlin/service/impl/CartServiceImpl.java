@@ -3,14 +3,14 @@ package com.github.shangtanlin.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
+import com.github.shangtanlin.common.utils.RabbitMQConsumeUtils;
 import com.github.shangtanlin.common.utils.UserHolder;
 import com.github.shangtanlin.mapper.CartItemMapper;
 import com.github.shangtanlin.mapper.ShopMapper;
 import com.github.shangtanlin.mapper.SkuMapper;
 import com.github.shangtanlin.mapper.SpuMapper;
 import com.github.shangtanlin.mapper.mq.MqMessageLogMapper;
-import com.github.shangtanlin.model.dto.CartItemDTO;
-import com.github.shangtanlin.model.dto.mq.MqCorrelationData;
+import com.github.shangtanlin.model.dto.cart.CartItemDTO;
 import com.github.shangtanlin.model.entity.cart.CartItem;
 import com.github.shangtanlin.model.entity.mq.MqMessageLog;
 import com.github.shangtanlin.model.entity.product.Sku;
@@ -18,12 +18,11 @@ import com.github.shangtanlin.model.entity.product.Spu;
 import com.github.shangtanlin.model.entity.shop.Shop;
 import com.github.shangtanlin.model.redis.CartRedisJson;
 import com.github.shangtanlin.model.vo.CartItemVO;
-import com.github.shangtanlin.mq.cart.CartWriteBackMessage;
+import com.github.shangtanlin.mq.message.CartWriteBackMessage;
 import com.github.shangtanlin.result.Result;
 import com.github.shangtanlin.service.CartService;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
-import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -62,6 +61,9 @@ public class CartServiceImpl implements CartService {
 
     @Autowired
     private MqMessageLogMapper mqMessageLogMapper;
+
+    @Autowired
+    private RabbitMQConsumeUtils rabbitMQSendUtils;
 
     @Autowired
     private ShopMapper shopMapper;
@@ -252,7 +254,6 @@ public class CartServiceImpl implements CartService {
 
         // 1. 生成唯一 ID
         String msgId = UUID.randomUUID().toString();
-        cartWriteBackMessage.setMsgId(msgId);
 
         // 2. 【先入库再发送】发送前先入库（status=0-发送中）
         MqMessageLog messageLog = MqMessageLog.builder()
@@ -269,32 +270,19 @@ public class CartServiceImpl implements CartService {
                 .build();
         mqMessageLogMapper.insert(messageLog);
 
-        // 3. 准备 CorrelationData
-        MqCorrelationData correlationData = new MqCorrelationData(
-                msgId,
-                CART_EXCHANGE,
-                CART_ROUTING_KEY,
-                cartWriteBackMessage
-        );
 
-        // 4. 发送消息
-        rabbitTemplate.convertAndSend(
+        // 3. 发送消息（异常时自动更新数据库状态）
+        rabbitMQSendUtils.sendMessage(
                 CART_EXCHANGE,
                 CART_ROUTING_KEY,
                 cartWriteBackMessage,
-                message -> {
-                    message.getMessageProperties().setCorrelationId(msgId);
-                    message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                    return message;
-                },
-                correlationData
+                msgId
         );
 
-        //返回结果
         return Result.ok();
     }
 
-    //删除商品
+    //删除购物车
     @Override
     public Result<?> deleteFromCart(Long skuId) {
         Long userId = UserHolder.getUser().getId();
@@ -315,7 +303,6 @@ public class CartServiceImpl implements CartService {
 
         // 1. 生成唯一 ID
         String msgId = UUID.randomUUID().toString();
-        cartWriteBackMessage.setMsgId(msgId);
 
         // 2. 【先入库再发送】
         MqMessageLog messageLog = MqMessageLog.builder()
@@ -332,25 +319,12 @@ public class CartServiceImpl implements CartService {
                 .build();
         mqMessageLogMapper.insert(messageLog);
 
-        // 3. 准备 CorrelationData
-        MqCorrelationData correlationData = new MqCorrelationData(
-                msgId, CART_EXCHANGE, CART_ROUTING_KEY, cartWriteBackMessage
-        );
-
-
-
-
-        // 4. 发送消息
-        rabbitTemplate.convertAndSend(
+        // 3. 发送消息（异常时自动更新数据库状态）
+        rabbitMQSendUtils.sendMessage(
                 CART_EXCHANGE,
                 CART_ROUTING_KEY,
                 cartWriteBackMessage,
-                message -> {
-                    message.getMessageProperties().setCorrelationId(msgId);
-                    message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                    return message;
-                },
-                correlationData
+                msgId
         );
 
         return Result.ok();
@@ -387,7 +361,6 @@ public class CartServiceImpl implements CartService {
 
         // 1. 生成唯一 ID
         String msgId = UUID.randomUUID().toString();
-        cartWriteBackMessage.setMsgId(msgId);
 
         // 2. 【先入库再发送】
         MqMessageLog messageLog = MqMessageLog.builder()
@@ -404,28 +377,16 @@ public class CartServiceImpl implements CartService {
                 .build();
         mqMessageLogMapper.insert(messageLog);
 
-        // 3. 准备 CorrelationData
-        MqCorrelationData correlationData = new MqCorrelationData(
-                msgId, CART_EXCHANGE, CART_ROUTING_KEY, cartWriteBackMessage
-        );
-
-        // 4. 发送消息
-        rabbitTemplate.convertAndSend(
+        // 3. 发送消息（异常时自动更新数据库状态）
+        rabbitMQSendUtils.sendMessage(
                 CART_EXCHANGE,
                 CART_ROUTING_KEY,
                 cartWriteBackMessage,
-                message -> {
-                    message.getMessageProperties().setCorrelationId(msgId);
-                    message.getMessageProperties().setDeliveryMode(MessageDeliveryMode.PERSISTENT);
-                    return message;
-                },
-                correlationData
+                msgId
         );
 
         return Result.ok();
     }
-
-
 
 
 }

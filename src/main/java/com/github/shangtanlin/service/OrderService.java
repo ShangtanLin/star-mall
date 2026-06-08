@@ -4,6 +4,7 @@ import com.github.shangtanlin.model.dto.order.OrderConfirmDTO;
 import com.github.shangtanlin.model.dto.order.OrderSubmitDTO;
 import com.github.shangtanlin.model.vo.OrderCreateVO;
 import com.github.shangtanlin.model.vo.order.OrderConfirmVO;
+import com.github.shangtanlin.model.vo.order.OrderStatusVO;
 import com.github.shangtanlin.model.vo.order.SubOrderVO;
 import com.github.shangtanlin.result.PageResult;
 
@@ -31,11 +32,10 @@ public interface OrderService {
 
     /**
      * 取消订单
-     * @param orderSn(主订单编号)
-     * @param userId
+     * @param parentOrderSn
      * @return
      */
-    boolean cancelOrder(String orderSn, Long userId);
+    void cancelParentOrder(String parentOrderSn);
 
 
 
@@ -50,13 +50,15 @@ public interface OrderService {
      */
     SubOrderVO getSubOrderDetail(String orderSn, Long userId);
 
+
+
     /**
      * 支付成功
      * @param orderSn
      * @param paymentType
      * @return
      */
-    boolean paySuccess(String orderSn, Integer paymentType);
+    void paySuccess(String orderSn, Integer paymentType);
 
 
 
@@ -87,7 +89,7 @@ public interface OrderService {
      * 查询主订单状态
      * @param parentOrderSn
      */
-    Integer getParentOrderStatus(String parentOrderSn);
+    OrderStatusVO getParentOrderStatus(String parentOrderSn);
 
 
 
@@ -108,13 +110,6 @@ public interface OrderService {
     OrderCreateVO resumePay(String subOrderSn);
 
 
-    /**
-     * 子订单支付成功
-     * @param subOrderSn
-     * @param paymentType
-     * @return
-     */
-    boolean payResumeSuccess(String subOrderSn, Integer paymentType);
 
 
 
@@ -122,5 +117,5 @@ public interface OrderService {
      * 查询主订单状态
      * @param subOrderSn
      */
-    Integer getSubOrderStatus(String subOrderSn);
+    OrderStatusVO getSubOrderStatus(String subOrderSn);
 }

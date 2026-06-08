@@ -1,7 +1,7 @@
 package com.github.shangtanlin.service;
 
 
-import com.github.shangtanlin.model.dto.ProductQueryDTO;
+import com.github.shangtanlin.model.dto.product.ProductQueryDTO;
 import com.github.shangtanlin.result.PageResult;
 import com.github.shangtanlin.model.vo.ProductCardVO;
 import com.github.shangtanlin.model.vo.ProductVO;

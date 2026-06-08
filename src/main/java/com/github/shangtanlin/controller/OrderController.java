@@ -5,6 +5,7 @@ import com.github.shangtanlin.model.dto.order.OrderConfirmDTO;
 import com.github.shangtanlin.model.dto.order.OrderSubmitDTO;
 import com.github.shangtanlin.model.vo.OrderCreateVO;
 import com.github.shangtanlin.model.vo.order.OrderConfirmVO;
+import com.github.shangtanlin.model.vo.order.OrderStatusVO;
 import com.github.shangtanlin.model.vo.order.SubOrderVO;
 import com.github.shangtanlin.result.PageResult;
 import com.github.shangtanlin.result.Result;
@@ -69,47 +70,27 @@ public class OrderController {
 
 
 
-
-    /**
-     * 模拟支付(主子订单共用)
-     * @param orderSn(主订单编号)
-     * @param paymentType
-     * @return
-     */
-    @GetMapping("/pay")
-    public String doMockPay(@RequestParam("orderSn") String orderSn,@RequestParam("paymentType")Integer paymentType) {
-        log.info("📱 手机端请求支付，单号：{}", orderSn);
-
-        // 调用你之前写的业务逻辑，把状态从 0 改为 1
-        // 同时也别忘了在 paySuccess 里记录流水和打印日志
-        //调用订单支付成功的逻辑
-        boolean success = orderService.paySuccess(orderSn, paymentType);
-
-        if (success) {
-            return "<h1 style='color:green;text-align:center;'>🎉 支付成功！</h1>" +
-                    "<p style='text-align:center;'>订单 " + orderSn + " 已确认，请查看电脑页面。</p>";
-        } else {
-            return "<h1 style='color:red;text-align:center;'>❌ 支付失败</h1>" +
-                    "<p style='text-align:center;'>订单状态异常或已过期。</p>";
-        }
-    }
-
-
-
-
-
-
-
      /**
-     * 取消订单
+     * 取消主订单
      * @param parentOrderSn(主订单编号)
      * @return
      */
     @PutMapping("/cancel/{parentOrderSn}")
     public Result<?> cancelOrder(@PathVariable("parentOrderSn") String parentOrderSn) {
-        Long userId = UserHolder.getUser().getId();
-        boolean isClosed = orderService.cancelOrder(parentOrderSn, userId);
-        return Result.ok(isClosed);
+        orderService.cancelParentOrder(parentOrderSn);
+        return Result.ok();
+    }
+
+
+    /**
+     * 取消子订单
+     * @param subOrderSn(子订单编号)
+     * @return
+     */
+    @PutMapping("/cancel/{subOrderSn}")
+    public Result<?> cancelSubOrder(@PathVariable("subOrderSn") String subOrderSn) {
+        //orderService.cancelSubOrder(subOrderSn);
+        return Result.ok();
     }
 
 
@@ -210,8 +191,8 @@ public class OrderController {
      */
     @GetMapping("/status/parent/{parentOrderSn}")
     public Result<?> getParentOrderStatus(@PathVariable("parentOrderSn") String parentOrderSn) {
-        Integer status = orderService.getParentOrderStatus(parentOrderSn);
-        return Result.ok(status);
+        OrderStatusVO vo = orderService.getParentOrderStatus(parentOrderSn);
+        return Result.ok(vo);
     }
 
 
@@ -222,8 +203,8 @@ public class OrderController {
      */
     @GetMapping("/status/sub/{subOrderSn}")
     public Result<?> getSubOrderStatus(@PathVariable("subOrderSn") String subOrderSn) {
-        Integer status = orderService.getSubOrderStatus(subOrderSn);
-        return Result.ok(status);
+        OrderStatusVO vo = orderService.getSubOrderStatus(subOrderSn);
+        return Result.ok(vo);
     }
 
 

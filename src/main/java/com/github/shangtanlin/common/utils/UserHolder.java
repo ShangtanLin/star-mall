@@ -1,6 +1,6 @@
 package com.github.shangtanlin.common.utils;
 
-import com.github.shangtanlin.model.dto.UserDTO;
+import com.github.shangtanlin.model.dto.user.UserDTO;
 
 public class UserHolder {
     private static final ThreadLocal<UserDTO> tl = new ThreadLocal<>();

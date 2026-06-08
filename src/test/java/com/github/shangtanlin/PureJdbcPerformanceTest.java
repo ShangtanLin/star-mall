@@ -28,6 +28,7 @@ public class PureJdbcPerformanceTest {
         String username = "root";
         String password = "123456";
 
+
         connection = DriverManager.getConnection(url, username, password);
         System.out.println("MySQL 连接成功！");
     }
